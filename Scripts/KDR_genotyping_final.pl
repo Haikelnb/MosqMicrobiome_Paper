@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#This program parses through the primer_sorted files and counts # of sequences that match mutant/WT sequences
+#This program parses through each line of Results file and determines if the sequences are mutant/WT sequences and prints out the genotype per sample
 use warnings;
 use strict;
 
