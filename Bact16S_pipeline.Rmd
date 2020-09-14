@@ -1,0 +1,256 @@
+---
+title: "Bact16S_pipeline"
+author: "Haikel Bogale"
+date: "4/14/2020"
+output: html_document
+---
+
+# Bact16S_pipeline_part1
+This is the pipline for 16s analysis using the workflow from the Dada2 protocol (from fastq files to assigning taxanomy)
+use r-3.4.0
+
+```{r Bact16S_part1}
+library(dada2); packageVersion("dada2")
+library(ggplot2); packageVersion("ggplot2")
+path <- "/local/projects-t3/SerreDLab-3/bogaleh/Colombian_Mosq_MiSeq_Bact16S/Fastq_reads/"
+#list.files(path)
+
+#-------------------------------------------------------
+# Check read quality
+#-------------------------------------------------------
+
+fnFs <- sort(list.files(path, pattern="R1.fastq", full.names = TRUE))
+fnRs <- sort(list.files(path, pattern="R2.fastq", full.names = TRUE))
+
+sample.names <- sapply(strsplit(basename(fnFs), "R"), `[`, 1) # Extract sample names, assuming  DNA_Plate_A10R1.fastq
+
+
+
+
+plot.quals2F <- plotQualityProfile(fnFs[1:2]) #plotting quality score and saving it as pdf files
+ggsave("qualplot1F.pdf", plot.quals2F, device="pdf")
+
+plot.quals2R <- plotQualityProfile(fnRs[210:211])
+ggsave("qualplot1R.pdf", plot.quals2R, device="pdf")
+
+#-------------------------------------------------------
+# Filter reads based on QC
+#-------------------------------------------------------
+
+filt_path <- file.path(path, "filtered") # Place filtered files in filtered/ subdirectory
+filtFs <- file.path(filt_path, paste0(sample.names, "_F_filt.fastq"))
+filtRs <- file.path(filt_path, paste0(sample.names, "_R_filt.fastq"))
+
+#load("/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq_3/dada4_4.RData")
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(280,250),
+                    maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=TRUE,
+                     compress=TRUE, multithread=TRUE) 
+head(out)
+
+save.image("dada4_4.RData")
+save.image("colmb1.RData")
+
+#-------------------------------------------------------
+# Learn the error rates - SLOW !!
+#-------------------------------------------------------
+
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+
+pdf("errF.pdf")
+plotErrors(errF, nominalQ=TRUE)
+dev.off()
+
+pdf("errR.pdf")
+plotErrors(errR, nominalQ=TRUE)
+dev.off()
+
+save.image("dada4_4.RData")
+save.image("colmb1.RData")
+
+#-------------------------------------------------------
+# Dereplication, Sample_Inference, & Merging PE reads
+#-------------------------------------------------------
+
+#names(filtFs) <- sample.names
+#names(filtRs) <- sample.names        
+
+#mergers <- vector("list", length(sample.names))
+#names(mergers) <- sample.names
+#for(sam in sample.names) {
+#  cat("Processing:", sam, "\n")
+#  derepFs <- derepFastq(filtFs[[sam]])
+#  ddF <- dada(derepFs, err=errF, multithread=TRUE)
+#  derepRs <- derepFastq(filtRs[[sam]])
+#  ddR <- dada(derepRs, err=errR, multithread=TRUE)
+#  merger <- mergePairs(ddF, derepFs, ddR, derepRs)
+#  mergers[[sam]] <- merger
+#}
+
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+derepRs <- derepFastq(filtRs, verbose=TRUE)
+# Name the derep-class objects by the sample names
+names(derepFs) <- sample.names
+names(derepRs) <- sample.names
+
+save.image("dada4_4.RData")
+save.image("colmb1.RData")
+#load("/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq3/dada4_4.RData")
+
+dadaFs <- dada(derepFs, err=errF, multithread=TRUE)
+dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
+
+#dadaFs[[1]]
+
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)
+# Inspect the merger data.frame from the first sample
+head(mergers[[1]])
+
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+table(nchar(getSequences(seqtab)))
+
+rm(derepFs); rm(derepRs)
+saveRDS(seqtab, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq_3/seqtab.rds")
+
+#save.image("dada4_4.RData")
+save.image("colmb1.RData")
+
+#-------------------------------------------------------
+# Remove chimeras
+#-------------------------------------------------------
+
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+#[1]   768 21659
+sum(seqtab.nochim)/sum(seqtab)
+#[1] 0.9666426
+#write.table(seqtab.nochim, file="temp_dada2_seqtab.nochim.txt", sep="\t", col.names=NA, quote=F)
+
+save.image("dada4_4.RData")
+
+#-------------------------------------------------------
+# Track reads through the pipeline
+#-------------------------------------------------------   
+#load("/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq3/dada4_4.RData")
+getN <- function(x) sum(getUniques(x))
+#track <- cbind(out, rowSums(seqtab), rowSums(seqtab.nochim))
+track <- cbind(out, sapply(dadaFs, getN), sapply(mergers, getN), rowSums(seqtab), rowSums(seqtab.nochim))
+#colnames(track) <- c("input", "filtered", "tabled", "nonchim")
+colnames(track) <- c("input", "filtered", "denoised", "merged", "tabled", "nonchim")
+head(track)
+#write.table(track, file="Tracking_readsout_relaxedTrimming_2.txt", sep="\t", col.names=NA, quote=F)
+
+save.image("dada4_4.RData")
+
+#-------------------------------------------------------
+# Assign Taxonomy
+#-------------------------------------------------------
+#rm(taxa)
+#taxa <- assignTaxonomy(seqtab.nochim, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq3/Fastq_3/silva_nr_v128_train_set.fa.gz", multithread=TRUE, tryRC=TRUE)
+#taxa <- addSpecies(taxa, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq3/Fastq_3/silva_species_assignment_v128.fa.gz", tryRC=TRUE, allowMultiple=3)
+#taxa_for_species <- assignTaxonomy(seqtab.nochim, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq_3/Fastq_Reads3/silva_nr_v128_train_set.fa.gz", multithread=TRUE, tryRC=TRUE)
+#taxa_for_species <- addSpecies(taxa_for_species, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq_3/Fastq_Reads3/silva_species_assignment_v128.fa.gz", tryRC=TRUE, allowMultiple=TRUE)
+taxa <- assignTaxonomy(seqtab.nochim, "/local/projects-t3/SerreDLab-3/bogaleh/Colombian_Mosq_MiSeq_Bact16S/Fastq_reads/silva_nr_v132_train_set.fa", multithread=TRUE, tryRC=TRUE)
+taxa <- addSpecies(taxa, "/local/projects-t3/SerreDLab-3/bogaleh/Colombian_Mosq_MiSeq_Bact16S/Fastq_reads/silva_species_assignment_v132.fa", tryRC=TRUE, allowMultiple=TRUE)
+
+#taxa.print_2 <- taxa # Removing sequence rownames for display only
+#rownames(taxa.print_2) <- NULL
+#head(taxa.print_2)
+
+#saveRDS(taxa, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq3/taxa_final.rds")
+saveRDS(taxa, "/local/projects-t3/SerreDLab-3/bogaleh/Colombian_Mosq_MiSeq_Bact16S/taxa_final.rds")
+
+save.image("dada4_4.RData")
+save.image("colmb1.RData")
+```
+
+# Bact16S_pipeline_part2
+This includes all analysis done after taxanomy is assigned to ASVs with the phyloseq package (i.e., ordination plots, adonis calcuations, adding metadata, etc)
+use r-3.4.0
+
+```{r Bact16S_part2}
+library(dada2); packageVersion("dada2")
+library(ggplot2); packageVersion("ggplot2")
+library(DECIPHER); packageVersion("DECIPHER")
+library(phangorn); packageVersion("phangorn")
+library(phyloseq); packageVersion("phyloseq")
+library(vegan); packageVersion("vegan")
+library("ape"); packageVersion("aple")
+
+## Following code is used to make a phyloseq object ##
+TAX <- tax_table(taxa)
+OTU <- otu_table(seqtab.nochim, taxa_are_rows=FALSE)
+sampledata <- import_qiime_sample_data("/local/projects-t3/SerreDLab-3/bogaleh/Colombian_Mosq_MiSeq_Bact16S/Colomb_Mosq_Sample_data.txt")
+SAM = sample_data(sampledata)
+
+#Making tree 
+seqs <- getSequences(seqtab.nochim)
+names(seqs) <- seqs
+alignment <- AlignSeqs(DNAStringSet(seqs), anchor=NA,verbose=FALSE)
+phangAlign <- phyDat(as(alignment, "matrix"), type="DNA")
+dm <- dist.ml(phangAlign)
+treeNJ <- NJ(dm) # Note, tip order != sequence order
+fit = pml(treeNJ, data=phangAlign)
+fitGTR <- update(fit, k=4, inv=0.2)
+fitGTR <- optim.pml(fitGTR, model="GTR", optInv=TRUE, optGamma=TRUE,
+                    rearrangement = "stochastic", control = pml.control(trace = 0))
+detach("package:phangorn", unload=TRUE)
+
+physeq_Final = merge_phyloseq(TAX, OTU, SAM, fitGTR$tree) # final physeq object
+
+### Making abundance plots ####
+physeq_Final_gr5000_reads <- prune_samples(rowSums(otu_table(physeq_Final)) > 5000, physeq_Final)
+
+# Example for Phylum level (done with replacing "Phylym" for lower taxanomic levels)
+glom_physeq_Final_gr5000_reads_Phylym <-  tax_glom(physeq_Final_gr5000_reads, taxrank = 'Phylym')  # agglomerate taxa
+glom_physeq_Final_gr5000_reads_Phylym = merge_samples(glom_physeq_Final_gr5000_reads_Phylym, "Location") # merge samples on sample variable of interest
+glom_physeq_Final_gr5000_reads_Phylym <- transform_sample_counts(glom_physeq_Final_gr5000_reads_Phylym, function(x) x/sum(x)) #get abundance in %
+glom_physeq_Final_gr5000_reads_Phylym <- psmelt(glom_physeq_Final_gr5000_reads_Phylym)
+glom_physeq_Final_gr5000_reads_Phylym$Phylym <- as.character(glom_physeq_Final_gr5000_reads_Phylym$Phylym) #convert to character
+glom_physeq_Final_gr5000_reads_Phylym$Phylym[glom_physeq_Final_gr5000_reads_Phylym$Abundance < 0.01] <- "less than 1% abund." #rename genera with < 1% abundance
+
+colourCount = length(unique(glom_physeq_Final_gr5000_reads_Phylym$Phylym))
+library(RColorBrewer) # need this package for the next code
+getPalette = colorRampPalette(brewer.pal(9, "Set1"))
+
+q <- ggplot(data=glom_physeq_Final_gr5000_reads_Phylym, aes(x=Sample, y=Abundance, fill=Phylym)) +
+  geom_bar(aes(), stat="identity", position="stack") + scale_fill_manual(values=getPalette(colourCount)) + 
+  xlab("") +
+  ylab("Relative abundance\n") +
+  #labs(title = "Figure S1") +
+  theme(axis.title.y  = element_text(size = 20)) +
+  theme(axis.text.y = element_text(size = 15)) +
+  theme(legend.text = element_text(size = 13)) +
+  theme(legend.title  = element_text(size = 14)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 15), axis.ticks = element_blank()) +
+  theme(plot.title = element_text(size = 19)) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank())
+
+
+### Making PCoA plots ###
+pslog <- transform_sample_counts(physeq_Final_gr5000_reads, function(x) log(1 + x))
+out.pcoa.log <- ordinate(pslog,  method = "MDS", distance = "bray")
+evals <- out.pcoa.log$values[,1]
+plot.ordination1 <- plot_ordination(pslog, out.pcoa.log, color = "Location") + 
+  coord_fixed(sqrt(evals[2] / evals[1])) +
+  theme_bw() +
+  geom_point(size = 3) +
+  theme(axis.text.y = element_text(size = 12)) +
+  theme(axis.title.y = element_text(size = 14)) +
+  theme(legend.text = element_text(size = 12)) +
+  theme(legend.title  = element_text(size = 13)) +
+  theme(axis.text.x = element_text(size = 12)) +
+  theme(axis.title.x = element_text(size = 14)) +
+  theme(plot.title = element_text(size = 19)) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) +
+  xlab("PC1  [9.4%]") + 
+  ylab("PC2  [8.3%]") +
+  scale_color_brewer(palette = "Paired")
+
+### Adonis Calculations a##
+
+d = phyloseq::distance(physeq_Guinea, "unifrac",  weighted = T)  ## for samples from Guinea only
+physeq_Guinea_adonis = adonis(d ~ Location + KDR + Species + BloodMeal + Infection, df)
+
+```
