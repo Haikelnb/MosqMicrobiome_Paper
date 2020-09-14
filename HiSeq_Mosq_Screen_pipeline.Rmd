@@ -1,5 +1,5 @@
 # Mosquito Screen Pipeline
-This pipeline analyzes rawreads for parasite, virus, mosquito, bacteria and mammalian primers to get taxonomy of species present in individual mosquito samples (rawreads to taxonomy)
+This pipeline analyzes rawreads for parasite, virus, and mammalian primers to get taxonomy of species present in individual mosquito samples (rawreads to taxonomy)
 ```{bash mkdirs, eval = TRUE}
 # also need to copy over these directories (with their files) to working directory: 
 # /local/projects-t3/SerreDLab-3/bogaleh/MiSeq_Hiseq_merged/Primer_lists
