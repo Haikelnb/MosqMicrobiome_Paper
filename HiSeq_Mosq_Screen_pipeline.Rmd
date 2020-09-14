@@ -1,0 +1,296 @@
+# Mosquito Screen Pipeline
+This pipeline analyzes rawreads for parasite, virus, mosquito, bacteria and mammalian primers to get taxonomy of species present in individual mosquito samples (rawreads to taxonomy)
+```{bash mkdirs, eval = TRUE}
+# also need to copy over these directories (with their files) to working directory: 
+# /local/projects-t3/SerreDLab-3/bogaleh/MiSeq_Hiseq_merged/Primer_lists
+# /local/projects-t3/SerreDLab-3/bogaleh/RMD_pipline_test/Scripts
+#mkdir Output
+#mkdir Output/First_trimming
+#mkdir Output/First_trimming/Trimmed
+#mkdir Output/First_trimming/Untrimmed
+#mkdir Output/First_trimming/Untrimmed/Greater_than300bps_amplicon
+#mkdir Output/First_trimming/Untrimmed/Trimmed_50bps
+#mkdir Output/Corrected_Reads
+mkdir Output/Flash_merging
+mkdir Output/Primer_trimming_sorting
+mkdir Output/Merged_by_Primer
+mkdir Output/Unique_Sequences
+mkdir Output/Blast_outputs
+mkdir Output/GI_IDs
+mkdir Output/Final_Output
+mkdir Output/Excel_Ready_Output
+```
+## 1) Demultiplex
+###(Written by Matt)
+   This code assorts each read to the sample it belongs to. Each sample name files has reads in a fastq format and is comprised of reads that are derived from that sample. The code uses the barcodes that distinguish each read to catogrize the reads into different files.
+
+### Usage: 
+keyFile is tab delimited with sample name, then I5, then I7
+The I7 barcode needs to be the reverse compliment 
+
+```{bash Demultiplexing, eval = FALSE}  
+"/usr/local/packages/perl-5.22.2/bin/perl" parseFastqBarcodesDualIndexTemp.pl -I7  "MCHB1_20170908_M01994_IL100092583_NoIndex_L001_R2.fastq.gz" -I5 "MCHB1_20170908_M01994_IL100092583_NoIndex_L001_R3.fastq.gz" -R1  "MCHB1_20170908_M01994_IL100092583_NoIndex_L001_R1.fastq.gz" -R2  "MCHB1_20170908_M01994_IL100092583_NoIndex_L001_R4.fastq.gz" --keyFile sampleKey.txt --verbose
+```
+
+## 2) R1 and R2 reads First Trimming
+This chunk trims a read if the second primer is present when the first primer is matched. Reads where the second primer is not found are untrimmed and deposited in the Untrimmed directory
+```{bash FirstTrimming, eval = FALSE}
+#rm Output/First_trimming/Trimmed/*.fastq
+#rm Output/First_trimming/Untrimmed/*.fastq
+#rm Output/First_trimming/R1_Results.txt
+for inFile in *R1.fastq;
+do  
+	perl Scripts/sort_by_primers_R1_trimming.pl Primer_lists/VP_primer_list.txt $inFile 'Output/First_trimming/' >> Output/First_trimming/R1_Results.txt
+done
+
+#rm Output/First_trimming/R2_Results.txt
+for inFile in *R2.fastq;
+do  
+	perl Scripts/sort_by_primers_R2_trimming.pl Primer_lists/VP_Forward_revcomReverse_primer_list.txt $inFile 'Output/First_trimming/' >> Output/First_trimming/R2_Results.txt
+done
+```
+
+## 3) Untrimmed Reads Sorting
+  This chunk sorts the reads that were untrimmed in the pervious chunk (reads that match the first primer but do not have a second primer/are not primer dimers). The reads are sorted based on amplicon length of each primer. Reads that are designated to primers with amplicon lengths shorter than 300bps are trimmed by 50bps from the end (3'end). Reads that belong to primers with amplicon lenghts longer than 300bps are untrimmed.
+
+```{bash SecondTrimming, eval = FALSE}
+for inFile in Output/First_trimming/Untrimmed/*R1_Untrimmed.fastq;
+do
+  perl Scripts/sorting_by_amplicon_length_R1.pl Primer_lists/VP_primer_list_amplicon_length.txt $inFile  >> Output/First_trimming/Untrimmed/R1_second_sorting_Results.txt
+done
+ 
+for inFile in Output/First_trimming/Untrimmed/*R2_Untrimmed.fastq;
+do
+  perl Scripts/sorting_by_amplicon_length_R2.pl Primer_lists/VP_F_revcomR_primers_ampliLength.txt $inFile  >> Output/First_trimming/Untrimmed/R2_second_sorting_Results.txt
+done
+```
+```{bash Moving Trimmed_Files, eval = FALSE}
+for inFile in Output/First_trimming/Untrimmed/*greaterThan300_ampl.fastq;
+do
+#  echo $inFile
+  mv  "$inFile" "Output/First_trimming/Untrimmed/Greater_than300bps_amplicon/" ;
+done
+
+for inFile in Output/First_trimming/Untrimmed/*_trimmed_50bps.fastq;
+do
+#  echo $inFile
+  mv  "$inFile" "Output/First_trimming/Untrimmed/Trimmed_50bps/" ;
+done
+```
+
+## 4) Correcting Trimmed Reads
+  This program makes sure that the R1 and R2 read pairs are both represented before merging using Flash. If a read pair is missing because of trimming/sorting that is done in the previous chunks, Flash is going to throw an error that the # of R1 and R2s do no match. This chunk corrects for that and only keeps Reads that have a pair.
+
+```{bash Correction_trimmed_(#)reads, eval = FALSE}
+#rm Output/First_trimming/Trimmed/*.corrected.fastq
+for r1 in Output/First_trimming/Trimmed/*R1*;
+do
+  r2=${r1/R1/R2}; #syntax variable/pattern/replacement
+# echo $r1 $r2 ;
+  perl Scripts/Correcting_reads_First_Trimming.pl $r1 $r2 
+done
+
+#rm Output/First_trimming/Untrimmed/Greater_than300bps_amplicon/*.corrected.fastq
+for r1 in Output/First_trimming/Untrimmed/Greater_than300bps_amplicon/*R1*;
+do
+  r2=${r1/R1/R2}; #syntax variable/pattern/replacement
+# echo $r1 $r2 ;
+  perl Scripts/Correcting_reads_Greater_than300bps.pl $r1 $r2 
+done
+
+#rm Output/First_trimming/Untrimmed/Trimmed_50bps/*.corrected.fastq
+for r1 in Output/First_trimming/Untrimmed/Trimmed_50bps/*R1*
+do
+  r2=${r1/R1/R2}; #syntax variable/pattern/replacement
+# echo $r1 $r2 ;
+  perl Scripts/Correcting_reads_Less_than300bps.pl $r1 $r2 
+done
+```
+
+## 5) Combining All R1s and R2s by sample
+  This chunk will use the cat command to combine all the Reads that have pairs in their respective samples. This includes reads that were trimmed because the second primer was there (First Trimming), Untrimmed reads with greater than 300bps amplicon (untrimmed entirely), and Untrimmed reads with less than 300bps amplicon (trimmed 50bps)
+
+```{bash Copying Reads, eval = FALSE}
+for inFile in Output/First_trimming/Trimmed/*.corrected.fastq;
+do
+#  echo $inFile
+  cp  "$inFile" "Output/Corrected_Reads/" ;
+done
+
+for inFile in Output/First_trimming/Untrimmed/Greater_than300bps_amplicon/*.corrected.fastq;
+do
+#  echo $inFile
+  cp  "$inFile" "Output/Corrected_Reads/" ;
+done
+
+for inFile in Output/First_trimming/Untrimmed/Trimmed_50bps/*.corrected.fastq;
+do
+#  echo $inFile
+  cp  "$inFile" "Output/Corrected_Reads/" ;
+done
+```
+```{bash Combining Reads, eval = FALSE}
+for r1 in Output/Corrected_Reads/*R1_greaterThan300_ampl.corrected.fastq;
+do
+  r2=${r1/R1_greaterThan300_ampl.corrected.fastq/R1_trimmed_secondPrimer.corrected.fastq}
+  r3=${r1/R1_greaterThan300_ampl.corrected.fastq/R1_trimmed_50bps.corrected.fastq}
+  cat $r1 $r2 $r3 >${r1/R1_greaterThan300_ampl.corrected.fastq/R1.corrected.merged.fastq}
+done
+
+for r1 in Output/Corrected_Reads/*R2_greaterThan300_ampl.corrected.fastq;
+do
+  r2=${r1/R2_greaterThan300_ampl.corrected.fastq/R2_trimmed_secondPrimer.corrected.fastq}
+  r3=${r1/R2_greaterThan300_ampl.corrected.fastq/R2_trimmed_50bps.corrected.fastq}
+  cat $r1 $r2 $r3 >${r1/R2_greaterThan300_ampl.corrected.fastq/R2.corrected.merged.fastq}
+done
+
+```
+
+## 6) Merging with Flash
+  This chunk uses Flash to merge the reads by individual samples. The flash script is written in the file flash_script.sh. This file has the parameters of the merging and naming of the output files
+  
+```{bash Moving_Files, eval = FALSE}
+for inFile in Output/Corrected_Reads/*.corrected.merged.fastq ;
+do
+#  echo $inFile
+  mv  "$inFile" "Output/Flash_merging" ;
+done
+```
+```{bash Flash_merging, eval = TRUE}
+
+  sh Scripts/flash_script.sh 
+  
+```
+
+## 7) Primer Sorting/Trimming
+  This program finds the Forward and Reverse primer from the primer list file and trims the primer sequence. Each read that belongs to a primer is saved under the primer and sample name. Need to enter the correct primer list file depending on the analysis. **primer key (MVP_primer_list.txt) is tab delimited with primer_name, reverse_primer, then revcomp of forward_primer, there is a tab in the end of each line
+
+```{bash Copying_files, eval = TRUE} 
+for inFile in Output/Flash_merging/*.extendedFrags.fastq ;
+do
+#  echo $inFile
+  cp  "$inFile" "Output/Primer_trimming_sorting" ;
+done
+```
+```{bash Primer Sorting/Trimming, eval = TRUE}
+for inFile in Output/Primer_trimming_sorting/*.extendedFrags.fastq ;
+do
+ perl Scripts/SortandTrim_by_primer.pl Primer_lists/VP_primer_list.txt ${inFile} >> Output/Primer_trimming_sorting/reads_hits.log.txt
+done
+```
+  
+## 8) Merging Samples by Primer
+  This chunk merges all reads from different samples that belong to the same primer into one file. At the same time, the sample name is noted in the header of each file for each primer file.
+
+```{bash Merging_by_Primer, eval = TRUE} 
+for inFile in Output/Primer_trimming_sorting/*.DNA_Plate_*
+do
+  withpath="${inFile}"
+  filename=${withpath##*/}
+	base=${filename%.DNA_Plate_*};
+#	echo $base;
+	perl Scripts/merge_by_primer.pl $inFile >> Output/Merged_by_Primer/${base}.sorted.merged.fasta ;
+done
+```
+
+## 9) Keeping Unique Sequences
+  This program keeps the unique sequences from each fasta file (each fasta file has the reads sorted by primer). Duplicate sequences or sequences that are found mutiple times (in one sample or mutiple samples) are written in a duplicates file
+
+```{bash Keeping_Unique_Seq, eval = TRUE}
+for inFile in Output/Merged_by_Primer/*.sorted.merged.fasta;
+do
+ # echo $filename;
+  perl Scripts/keep_unique_sequence.pl $inFile >> Output/Unique_Sequences/Results_unique_sequences.txt;
+done
+```
+
+## 10) Blast Unique Sequences
+  This chunk uses blastn to query all the unique sequences to the ncbi database. It is composed of only a bash for loop
+
+```{bash Blastn, eval = TRUE}
+for r1 in Output/Unique_Sequences/*.unique.fasta; 
+do	
+	r2=${r1/.unique.fasta/.blast_output};
+  #echo $r1 $r2;
+  "/usr/local/packages/ncbi-blast-2.2.31+/bin/blastn" -db "/export/databases/blast/nt" -negative_gilist "/local/projects-t3/SerreDLab-3/bogaleh/HiSeq_Mosq_Screen/Primer_lists/unculturedOrgs_8_16_18.gi" -query $r1 -out $r2 -max_hsps=1 -outfmt "7 qseqid sseqid pident qlen length evalue score"
+done
+```
+
+## 11) Parsing Blast Output
+  This program parses through the blast output files. The script takes the best hit, represented by the highest raw score, from each query sequence.It also reads through the duplicates file to count the number of samples each query sequence is found in.
+
+```{bash Copying_BOs_Duplicates, eval = TRUE}
+for inFile in Output/Unique_Sequences/*.blast_output ;
+do
+#  echo $inFile
+  cp  "$inFile" "Output/Blast_outputs" ;
+done
+
+for inFile in Output/Unique_Sequences/*.duplicate.fasta ;
+do
+# echo $inFile
+  cp  "$inFile" "Output/Blast_outputs" ;
+done
+```
+```{bash BlastOutput_Parsing, eval = TRUE}
+for blastO in Output/Blast_outputs/*.blast_output ;
+do
+  duplicate=${blastO/.blast_output/.duplicate.fasta};
+#  echo $blastO $duplicate;
+	perl Scripts/blastOutputParsing.pl $blastO $duplicate ;
+done
+```
+
+## 12) Get Taxanomy from GI_IDs
+  This chunk parses through the blast_output file (just like the parse_blastOutput script) and prints out the gi_ids only in one column. This format is needed for getting the taxanomy for each query blast hit. The bast hits are gain parsed using the raw score (last column) of the blast_output. Afterwards it uses the getTaxaV2.pl script (written by matt) to get the taxanomy from ncbi.
+
+```{bash Getting_GI_IDs, eval = TRUE}
+for inFile in Output/Blast_outputs/*.blast_output ;
+do
+	perl Scripts/parse_for_GIs.pl $inFile  ;
+done
+```
+```{bash Getting_Taxa, eval = TRUE}
+for giFile in Output/GI_IDs/*_gi_id.txt;
+do
+	outFile=${giFile/_gi_id.txt/.taxa_output}; 
+#	echo $giFile $outFile;
+	"/usr/local/packages/perl-5.22.2/bin/perl" Scripts/getTaxaV2.pl --input $giFile --ranks "superkingdom, kingdom, phylum, class, order, family, genus, subfamily" > $outFile ;
+done
+```  
+
+## 13) Replace GIs with Taxa
+  This last chunck replaces the GI_IDs from the parsed blast_outputs with the taxanomy found in the taxa_output files.
+
+```{bash Moving_TaxaOutput_parsedBO, eval = TRUE}
+for inFile in Output/GI_IDs/*.taxa_output ;
+do
+#  echo $inFile
+  mv  "$inFile" "Output/Final_Output/" ;
+done
+
+for inFile in Output/Blast_outputs/*.blast_output.parsed ;
+do
+#  echo $inFile
+  mv  "$inFile" "Output/Final_Output/" ;
+done
+```
+```{bash Final_Output, eval = TRUE}
+for ParsedIn in Output/Final_Output/*.blast_output.parsed;
+do
+  TaxaIn=${ParsedIn/.blast_output.parsed/.taxa_output}; 
+#	echo $ParsedIn $TaxaIn;
+	perl Scripts/replaceGIs_with_taxa.pl $ParsedIn $TaxaIn ;
+done
+```
+
+## 14) Final_Parsing
+  This chunk parses through the Final_outputs and keeps only unique species for each query sequence
+
+```{bash Real_Final_Output, eval = TRUE}
+for inFile in Output/Final_Output/*_Final.output.txt ;
+do
+#  echo $inFile
+  perl Scripts/Parsing_FinalOutput.pl $inFile
+done
+```
