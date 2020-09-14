@@ -1,0 +1,180 @@
+# Mosquito Screen Pipeline
+This pipeline analyzes rawreads for parasite, virus, mosquito, bacteria and mammalian primers to get taxonomy of species present in individual mosquito samples (rawreads to taxonomy)
+```{bash mkdirs, eval = TRUE}
+# also need to copy over these directories (with their files) to working directory: 
+# /local/projects-t3/SerreDLab-3/bogaleh/RMD_pipline_test/Primer_lists
+# /local/projects-t3/SerreDLab-3/bogaleh/RMD_pipline_test/Scripts
+mkdir Output
+mkdir Output/First_trimming
+mkdir Output/First_trimming/Trimmed
+mkdir Output/First_trimming/Untrimmed
+mkdir Output/First_trimming/Untrimmed/Greater_than300bps_amplicon
+mkdir Output/First_trimming/Untrimmed/Trimmed_50bps
+mkdir Output/Corrected_Reads
+mkdir Output/Flash_merging
+mkdir Output/Primer_trimming_sorting
+mkdir Output/Merged_by_Primer
+mkdir Output/Unique_Sequences
+mkdir Output/Blast_outputs
+mkdir Output/GI_IDs
+mkdir Output/Final_Output
+mkdir Output/Excel_Ready_Output
+```
+## 2) R1 and R2 reads First Trimming
+This chunk trims a read if the second primer is present when the first primer is matched. Reads where the second primer is not found are untrimmed and deposited in the Untrimmed directory
+```{bash FirstTrimming, eval = TRUE}
+#rm Output/First_trimming/Trimmed/*.fastq
+#rm Output/First_trimming/Untrimmed/*.fastq
+#rm Output/First_trimming/R1_Results.txt
+for inFile in *R1.fastq;
+do  
+	perl Scripts/sort_by_primers_R1_trimming.pl Primer_lists/KDR_primer.txt $inFile 'Output/First_trimming/' >> Output/First_trimming/R1_Results.txt
+done
+
+#rm Output/First_trimming/R2_Results.txt
+for inFile in *R2.fastq;
+do  
+	perl Scripts/sort_by_primers_R2_trimming.pl Primer_lists/KDR_F_revcomR_primer.txt $inFile 'Output/First_trimming/' >> Output/First_trimming/R2_Results.txt
+done
+```
+
+## 3) Untrimmed Reads Sorting
+  This chunk sorts the reads that were untrimmed in the pervious chunk (reads that match the first primer but do not have a second primer/are not primer dimers). The reads are sorted based on amplicon length of each primer. Reads that are designated to primers with amplicon lengths shorter than 300bps are trimmed by 50bps from the end (3'end). Reads that belong to primers with amplicon lenghts longer than 300bps are untrimmed.
+
+```{bash SecondTrimming, eval = TRUE}
+for inFile in Output/First_trimming/Untrimmed/*R1_Untrimmed.fastq;
+do
+  perl Scripts/sorting_by_amplicon_length_R1.pl Primer_lists/KDR_primer_amplicon_length.txt $inFile  >> Output/First_trimming/Untrimmed/R1_second_sorting_Results.txt
+done
+ 
+for inFile in Output/First_trimming/Untrimmed/*R2_Untrimmed.fastq;
+do
+  perl Scripts/sorting_by_amplicon_length_R2.pl Primer_lists/KDR_F_revcomR_ampliLength.txt $inFile  >> Output/First_trimming/Untrimmed/R2_second_sorting_Results.txt
+done
+```
+```{bash Moving Trimmed_Files, eval = TRUE}
+#for inFile in Output/First_trimming/Untrimmed/*greaterThan300_ampl.fastq;
+#do
+#  echo $inFile
+#  mv  "$inFile" "Output/First_trimming/Untrimmed/Greater_than300bps_amplicon/" ;
+#done
+
+for inFile in Output/First_trimming/Untrimmed/*_trimmed_50bps.fastq;
+do
+#  echo $inFile
+  mv  "$inFile" "Output/First_trimming/Untrimmed/Trimmed_50bps/" ;
+done
+```
+
+## 4) Correcting Trimmed Reads
+  This program makes sure that the R1 and R2 read pairs are both represented before merging using Flash. If a read pair is missing because of trimming/sorting that is done in the previous chunks, Flash is going to throw an error that the # of R1 and R2s do no match. This chunk corrects for that and only keeps Reads that have a pair.
+
+```{bash Correction_trimmed_(#)reads, eval = TRUE}
+#rm Output/First_trimming/Trimmed/*.corrected.fastq
+for r1 in Output/First_trimming/Trimmed/*R1*;
+do
+  r2=${r1/R1/R2}; #syntax variable/pattern/replacement
+# echo $r1 $r2 ;
+  perl Scripts/Correcting_reads_First_Trimming.pl $r1 $r2 
+done
+
+#rm Output/First_trimming/Untrimmed/Greater_than300bps_amplicon/*.corrected.fastq
+#for r1 in Output/First_trimming/Untrimmed/Greater_than300bps_amplicon/*R1*;
+#do
+#  r2=${r1/R1/R2}; #syntax variable/pattern/replacement
+# echo $r1 $r2 ;
+#  perl Scripts/Correcting_reads_Greater_than300bps.pl $r1 $r2 
+#done
+
+#rm Output/First_trimming/Untrimmed/Trimmed_50bps/*.corrected.fastq
+for r1 in Output/First_trimming/Untrimmed/Trimmed_50bps/*R1*
+do
+  r2=${r1/R1/R2}; #syntax variable/pattern/replacement
+# echo $r1 $r2 ;
+  perl Scripts/Correcting_reads_Less_than300bps.pl $r1 $r2 
+done
+```
+
+## 5) Combining All R1s and R2s by sample
+  This chunk will use the cat command to combine all the Reads that have pairs in their respective samples. This includes reads that were trimmed because the second primer was there (First Trimming), Untrimmed reads with greater than 300bps amplicon (untrimmed entirely), and Untrimmed reads with less than 300bps amplicon (trimmed 50bps)
+
+```{bash Copying Reads, eval = TRUE}
+for inFile in Output/First_trimming/Trimmed/*.corrected.fastq;
+do
+#  echo $inFile
+  cp  "$inFile" "Output/Corrected_Reads/" ;
+done
+
+#for inFile in Output/First_trimming/Untrimmed/Greater_than300bps_amplicon/*.corrected.fastq;
+#do
+#  echo $inFile
+#  cp  "$inFile" "Output/Corrected_Reads/" ;
+#done
+
+for inFile in Output/First_trimming/Untrimmed/Trimmed_50bps/*.corrected.fastq;
+do
+#  echo $inFile
+  cp  "$inFile" "Output/Corrected_Reads/" ;
+done
+```
+```{bash Combining Reads, eval = TRUE}
+for r1 in Output/Corrected_Reads/*R1_trimmed_secondPrimer.corrected.fastq;
+do
+  r3=${r1/R1_trimmed_secondPrimer.corrected.fastq/R1_trimmed_50bps.corrected.fastq}
+  cat $r1 $r3 >${r1/R1_trimmed_secondPrimer.corrected.fastq/R1.corrected.merged.fastq}
+done
+
+for r1 in Output/Corrected_Reads/*R2_trimmed_secondPrimer.corrected.fastq;
+do
+  r3=${r1/R2_trimmed_secondPrimer.corrected.fastq/R2_trimmed_50bps.corrected.fastq}
+  cat $r1 $r3 >${r1/R2_trimmed_secondPrimer.corrected.fastq/R2.corrected.merged.fastq}
+done
+
+```
+
+## 6) Merging with Flash
+  This chunk uses Flash to merge the reads by individual samples. The flash script is written in the file flash_script.sh. This file has the parameters of the merging and naming of the output files
+  
+```{bash Moving_Files, eval = TRUE}
+for inFile in Output/Corrected_Reads/*.corrected.merged.fastq ;
+do
+#  echo $inFile
+  mv  "$inFile" "Output/Flash_merging" ;
+done
+```
+```{bash Flash_merging, eval = TRUE}
+
+  sh "Scripts/flash_script.sh" 
+  
+```
+
+## 7) Primer Sorting/Trimming
+  This program finds the Forward and Reverse primer from the primer list file and trims the primer sequence. Each read that belongs to a primer is saved under the primer and sample name. Need to enter the correct primer list file depending on the analysis. **primer key (MVP_primer_list.txt) is tab delimited with primer_name, reverse_primer, then revcomp of forward_primer, there is a tab in the end of each line
+
+```{bash Copying_files, eval = TRUE} 
+for inFile in Output/Flash_merging/*.extendedFrags.fastq ;
+do
+#  echo $inFile
+  cp  "$inFile" "Output/Primer_trimming_sorting" ;
+done
+```
+```{bash Primer Sorting/Trimming, eval = TRUE}
+for inFile in Output/Primer_trimming_sorting/*.extendedFrags.fastq ;
+do
+ perl Scripts/SortandTrim_by_primer.pl Primer_lists/KDR_primer.txt ${inFile} >> Output/Primer_trimming_sorting/reads_hits.log.txt
+done
+```
+## 8) Identify Top sequences
+  This chunk identifies the top 2 sequences (highest readcount) in each sample and prints the total read count per sample, the count of reads for Seq1 and the sequence of Seq1, or the count and sequence of Seq1 and Seq2 if Seq2/(Seq1+Seq2) is greater than 0.35.
+```{bash Sequence_count_per_sample, eval = TRUE} 
+for inFile in Output/Primer_trimming_sorting/*.extendedFrags.fastq
+do
+	perl Scripts/Sequence_count_per_sample.p $inFile > KDR_Finalized_Results.txt;
+done
+```
+
+## 9) Determine Genotype 
+  This program parses through the KDR_Finalized_Results.txt file (where each line repesents individual samples andhas the sequences of Seq1 or Seq1 and Seq2) and determines if the sequences are mutant/WT sequences and prints out the genotype per sample
+```{bash KDR_genotyping, eval = TRUE}
+perl Scripts/KDR_genotyping_final.pl KDR_Finalized_Results.txt > KDR_genotypedResults.txt;
+```
