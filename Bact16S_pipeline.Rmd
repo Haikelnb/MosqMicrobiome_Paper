@@ -72,20 +72,6 @@ save.image("colmb1.RData")
 # Dereplication, Sample_Inference, & Merging PE reads
 #-------------------------------------------------------
 
-#names(filtFs) <- sample.names
-#names(filtRs) <- sample.names        
-
-#mergers <- vector("list", length(sample.names))
-#names(mergers) <- sample.names
-#for(sam in sample.names) {
-#  cat("Processing:", sam, "\n")
-#  derepFs <- derepFastq(filtFs[[sam]])
-#  ddF <- dada(derepFs, err=errF, multithread=TRUE)
-#  derepRs <- derepFastq(filtRs[[sam]])
-#  ddR <- dada(derepRs, err=errR, multithread=TRUE)
-#  merger <- mergePairs(ddF, derepFs, ddR, derepRs)
-#  mergers[[sam]] <- merger
-#}
 
 derepFs <- derepFastq(filtFs, verbose=TRUE)
 derepRs <- derepFastq(filtRs, verbose=TRUE)
@@ -113,8 +99,8 @@ table(nchar(getSequences(seqtab)))
 rm(derepFs); rm(derepRs)
 saveRDS(seqtab, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq_3/seqtab.rds")
 
-#save.image("dada4_4.RData")
-save.image("colmb1.RData")
+save.image("dada4_4.RData")
+
 
 #-------------------------------------------------------
 # Remove chimeras
@@ -146,11 +132,6 @@ save.image("dada4_4.RData")
 #-------------------------------------------------------
 # Assign Taxonomy
 #-------------------------------------------------------
-#rm(taxa)
-#taxa <- assignTaxonomy(seqtab.nochim, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq3/Fastq_3/silva_nr_v128_train_set.fa.gz", multithread=TRUE, tryRC=TRUE)
-#taxa <- addSpecies(taxa, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq3/Fastq_3/silva_species_assignment_v128.fa.gz", tryRC=TRUE, allowMultiple=3)
-#taxa_for_species <- assignTaxonomy(seqtab.nochim, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq_3/Fastq_Reads3/silva_nr_v128_train_set.fa.gz", multithread=TRUE, tryRC=TRUE)
-#taxa_for_species <- addSpecies(taxa_for_species, "/local/projects-t3/SerreDLab-3/bogaleh/Bact16S_HiSeq_3/Fastq_Reads3/silva_species_assignment_v128.fa.gz", tryRC=TRUE, allowMultiple=TRUE)
 taxa <- assignTaxonomy(seqtab.nochim, "/local/projects-t3/SerreDLab-3/bogaleh/Colombian_Mosq_MiSeq_Bact16S/Fastq_reads/silva_nr_v132_train_set.fa", multithread=TRUE, tryRC=TRUE)
 taxa <- addSpecies(taxa, "/local/projects-t3/SerreDLab-3/bogaleh/Colombian_Mosq_MiSeq_Bact16S/Fastq_reads/silva_species_assignment_v132.fa", tryRC=TRUE, allowMultiple=TRUE)
 
